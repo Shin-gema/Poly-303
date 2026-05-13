@@ -1,11 +1,16 @@
 import numpy as np
 import math
+import time
 from dataclasses import dataclass, field
+from typing import Dict, Any
 from instrument.instrument import Instrument, Voice  # ton module
 
 
 @dataclass
-class TB303Params:
+class TB303Parameter:
+    """Classe unifiée pour gérer les paramètres TB303, leur sélection et leurs contraintes."""
+    
+    # ─── Données des paramètres ───────────────────────────────────
     # Oscillateur
     waveform: str = "saw"          # "saw" ou "square"
     pulse_width: float = 0.5       # Pour square uniquement (0.0–1.0)
@@ -18,16 +23,174 @@ class TB303Params:
     # Enveloppe filtre
     attack: float = 0.005          # secondes
     decay: float = 0.2             # secondes
+    sustain: float = 0.7           # niveau de sustain (0.0–1.0)
+    release: float = 0.3           # secondes
 
     # Accent
     accent: bool = False
     accent_amount: float = 0.7     # Boost volume + filtre si accent
 
+    # ─── Sélection actuelle pour édition ──────────────────────────
+    selected_component: str = "filter"      # "filter", "oscillator", "accent", "envelope"
+    selected_parameter: str = "cutoff"      # Ex: "cutoff", "resonance", "attack", "decay", etc.
+
+    # ─── Dictionnaire des paramètres éditables (constraints) ──────
+    _editable_params: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self):
+        """Initialise le dictionnaire des paramètres éditables après la création."""
+        self._editable_params = {
+            "filter": {
+                "cutoff": {"min": 20.0, "max": 8000.0, "type": "float", "step": 50.0},
+                "resonance": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.05},
+                "env_mod": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.05},
+            },
+            "oscillator": {
+                "waveform": {"min": 0.0, "max": 1.0, "type": "str", "step": 1.0},
+                "pulse_width": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.05},
+            },
+            "envelope": {
+                "attack": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.01},
+                "decay": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.01},
+                "sustain": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.05},
+                "release": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.01},
+            },
+            "accent": {
+                "accent": {"min": 0.0, "max": 1.0, "type": "bool", "step": 1.0},
+                "accent_amount": {"min": 0.0, "max": 1.0, "type": "float", "step": 0.05},
+            },
+        }
+
+    # ─── Méthodes de sélection et navigation ───────────────────────
+    def get_full_name(self) -> str:
+        """Retourne le chemin complet ex: 'filter/cutoff'"""
+        return f"{self.selected_component}/{self.selected_parameter}"
+
+    def set_from_string(self, path: str) -> None:
+        """Définit la sélection à partir d'une chaîne comme 'filter/attack'"""
+        parts = path.split("/")
+        if len(parts) == 2:
+            self.selected_component, self.selected_parameter = parts
+
+    def get_components_list(self) -> list:
+        """Retourne la liste des composants disponibles."""
+        return list(self._editable_params.keys())
+
+    def get_parameters_for_component(self, component: str) -> list:
+        """Retourne la liste des paramètres d'un composant."""
+        if component in self._editable_params:
+            return list(self._editable_params[component].keys())
+        return []
+
+    def get_parameter_info(self, component: str, parameter: str) -> Dict[str, Any]:
+        """Retourne les infos d'un paramètre (min, max, type, step)."""
+        if component in self._editable_params and parameter in self._editable_params[component]:
+            return self._editable_params[component][parameter]
+        return None
+
+    def cycle_component(self, direction: int = 1):
+        """Cycle vers le composant suivant/précédent."""
+        components = self.get_components_list()
+        current_idx = components.index(self.selected_component) if self.selected_component in components else 0
+        next_idx = (current_idx + direction) % len(components)
+        self.selected_component = components[next_idx]
+        # Reset au premier paramètre du nouveau composant
+        self.selected_parameter = self.get_parameters_for_component(self.selected_component)[0]
+        print(f"Selected component: {self.selected_component}, parameter: {self.selected_parameter}")
+
+    def cycle_parameter(self, direction: int = 1):
+        """Cycle vers le paramètre suivant/précédent du composant actuel."""
+        params = self.get_parameters_for_component(self.selected_component)
+        if not params:
+            return
+        current_idx = params.index(self.selected_parameter) if self.selected_parameter in params else 0
+        next_idx = (current_idx + direction) % len(params)
+        self.selected_parameter = params[next_idx]
+        print(f"Selected component: {self.selected_component}, parameter: {self.selected_parameter}")
+
+    # ─── Méthodes de getter/setter des valeurs ────────────────────
+    def get_parameter_value(self) -> float:
+        """Retourne la valeur actuelle du paramètre sélectionné."""
+        return getattr(self, self.selected_parameter, 0.0)
+
+    def get_parameter_position(self) -> float:
+        """Retourne la position d'encodeur du paramètre sélectionné (convertie si nécessaire)."""
+        value = self.get_parameter_value()
+        info = self.get_parameter_info(self.selected_component, self.selected_parameter)
+        
+        if info and info["type"] == "str":
+            # Pour les paramètres string (ex: waveform), retourner un indice
+            if self.selected_parameter == "waveform":
+                return 0.0 if value == "saw" else 1.0
+            return 0.0
+        elif info and info["type"] == "bool":
+            return 1.0 if value else 0.0
+        
+        # Pour float et int, retourner la valeur normalisée dans la plage
+        if info:
+            range_size = info["max"] - info["min"]
+            if range_size > 0:
+                return (value - info["min"]) / range_size * 100.0
+        return float(value)
+
+    def set_parameter_value(self, value: float) -> None:
+        """Définit la valeur du paramètre sélectionné."""
+        info = self.get_parameter_info(self.selected_component, self.selected_parameter)
+        if info:
+            if info["type"] == "str":
+                # Pour string, value est un indice
+                if self.selected_parameter == "waveform":
+                    setattr(self, self.selected_parameter, "saw" if value < 0.5 else "square")
+            elif info["type"] == "bool":
+                setattr(self, self.selected_parameter, value > 0.5)
+            else:
+                # Pour float et int
+                clamped = max(info["min"], min(info["max"], value))
+                setattr(self, self.selected_parameter, clamped)
+        print(f"Set {self.get_full_name()} to {getattr(self, self.selected_parameter)}")
+
 
 class TB303Instrument(Instrument):
-    def __init__(self, params: TB303Params = None, **kwargs):
+    def __init__(self, params: TB303Parameter = None, **kwargs):
         super().__init__(**kwargs)
-        self.params = params or TB303Params()
+        self.params = params or TB303Parameter()
+
+    # ─── Délégation des méthodes de paramètres ────────────────────
+    def get_editable_params(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Retourne le dictionnaire des paramètres éditables."""
+        return self.params._editable_params
+
+    def get_components_list(self) -> list:
+        """Retourne la liste des composants disponibles."""
+        return self.params.get_components_list()
+
+    def get_parameters_for_component(self, component: str) -> list:
+        """Retourne la liste des paramètres d'un composant."""
+        return self.params.get_parameters_for_component(component)
+
+    def get_parameter_info(self, component: str, parameter: str) -> Dict[str, Any]:
+        """Retourne les infos d'un paramètre."""
+        return self.params.get_parameter_info(component, parameter)
+
+    def cycle_component(self, direction: int = 1):
+        """Cycle vers le composant suivant/précédent."""
+        self.params.cycle_component(direction)
+
+    def cycle_parameter(self, direction: int = 1):
+        """Cycle vers le paramètre suivant/précédent du composant actuel."""
+        self.params.cycle_parameter(direction)
+
+    def get_parameter_value(self) -> float:
+        """Retourne la valeur actuelle du paramètre sélectionné."""
+        return self.params.get_parameter_value()
+
+    def get_parameter_position(self) -> float:
+        """Retourne la position d'encodeur du paramètre sélectionné (convertie si nécessaire)."""
+        return self.params.get_parameter_position()
+
+    def set_parameter_value(self, value: float) -> None:
+        """Définit la valeur du paramètre sélectionné."""
+        self.params.set_parameter_value(value)
 
     # ─── Oscillateur ──────────────────────────────────────────────
     def _oscillator(self, phases: np.ndarray) -> np.ndarray:
@@ -68,21 +231,39 @@ class TB303Instrument(Instrument):
 
     # ─── Enveloppe filtre ─────────────────────────────────────────
     def _filter_envelope(self, frames: int, voice: Voice) -> np.ndarray:
-        """Génère l'enveloppe Attack/Decay qui module le cutoff."""
+        """Génère l'enveloppe ADSR complète qui module le cutoff."""
         p = self.params
         sr = self.sample_rate
-        elapsed = 0.0  # simplifié : on suppose début de note
+        now = time.time()
+        elapsed_time = now - voice.start_time
+        time_remaining = voice.duration - elapsed_time
 
-        attack_samples  = max(1, int(p.attack * sr))
-        decay_samples   = max(1, int(p.decay  * sr))
+        attack_time = p.attack
+        decay_time = p.decay
+        adsr_time = attack_time + decay_time
+        release_time = p.release
 
         env = np.zeros(frames)
         for i in range(frames):
-            if i < attack_samples:
-                env[i] = i / attack_samples
+            # Position en secondes pour cet échantillon
+            sample_time = elapsed_time + (i / sr)
+            time_until_end = voice.duration - sample_time
+
+            if sample_time < attack_time:
+                # Attack: 0 → 1
+                env[i] = sample_time / attack_time
+            elif sample_time < adsr_time:
+                # Decay: 1 → sustain level
+                decay_pos = sample_time - attack_time
+                env[i] = 1.0 - (decay_pos / decay_time) * (1.0 - p.sustain)
+            elif time_until_end > release_time:
+                # Sustain: reste au niveau sustain
+                env[i] = p.sustain
             else:
-                decay_pos = i - attack_samples
-                env[i] = max(0.0, 1.0 - decay_pos / decay_samples)
+                # Release: sustain → 0
+                if release_time > 0:
+                    release_pos = release_time - time_until_end
+                    env[i] = p.sustain * max(0.0, 1.0 - release_pos / release_time)
 
         return env
 

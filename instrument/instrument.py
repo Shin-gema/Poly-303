@@ -143,7 +143,6 @@ class Instrument(ABC):
             voice.start_time = event.timestamp
             voice.active = True
             voice.phase = 0.0
-        print (f"Playing note: MIDI {event.midi_note}, Freq {voice.frequency:.2f} Hz, Vel {event.velocity}, Dur {event.duration:.2f}s, Vol {event.volume:.2f}")
 
     def stop_all(self) -> None:
         self._stop_event.set()

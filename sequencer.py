@@ -18,9 +18,10 @@ TRACK_COLORS = [
 NEEDLE_COLOR  = (0, 255, 0)   # Vert — aiguille
 
 class mode (Enum):
-    SEQUENCE = 1
-    NOTE_SELECTION = 2
-    NOTE_EDITING = 3
+    SEQUENCE = 0
+    NOTE_SELECTION = 1
+    NOTE_EDITING = 2
+    INSTRUMENT_EDITING = 3
 
 @dataclass
 class track:
@@ -43,7 +44,6 @@ class sequencer:
         self._tick_thread = None
         self._stop_event = threading.Event()
         self.pixel = None                   # PixelRing à définir dans main.py
-        self.screen_manager = None          # ScreenManager à définir dans main.py
         self.sequence_length = 16           # Nombre de steps dans la séquence
         self.mode = mode.SEQUENCE
         self.instrument: Instrument | None = None
@@ -121,8 +121,6 @@ class sequencer:
         elif len(self.tracks[self.current_track].pattern) > position:
             self.tracks[self.current_track].pattern = self.tracks[self.current_track].pattern[:position]
 
-        if self.screen_manager:
-            self.screen_manager.set_variable("division", position)
         print(f"Division changed to: {position}")
 
     def on_selection_rotate(self, position):
@@ -156,14 +154,10 @@ class sequencer:
         """Callback pour rotation de l'encodeur de fréquence/BPM"""
         if self.mode == mode.SEQUENCE and self.frequency_target == "volume":
             self.volume = max(0, min(100, position))
-            if self.screen_manager:
-                self.screen_manager.set_variable("volume", self.volume)
             print(f"Volume changed to: {self.volume}")
             return
 
         self.bpm = max(30, min(300, position * 2 + 30))  # 30-300 BPM
-        if self.screen_manager:
-            self.screen_manager.set_variable("bpm", self.bpm)
         print(f"BPM changed to: {self.bpm}")
 
     def toggle_frequency_target(self):
@@ -171,8 +165,6 @@ class sequencer:
             return self.frequency_target
 
         self.frequency_target = "volume" if self.frequency_target == "bpm" else "bpm"
-        if self.screen_manager:
-            self.screen_manager.set_variable("frequency_target", self.frequency_target, scene_name="play")
         print(f"Frequency encoder target changed to: {self.frequency_target}")
         return self.frequency_target
 
@@ -180,15 +172,11 @@ class sequencer:
         """Callback pour rotation de l'encodeur de vélocité"""
         self.tracks[self.current_track].velocity = max(1, min(100, position))
         self.selected_note_velocity = self.tracks[self.current_track].velocity
-        if self.screen_manager:
-            self.screen_manager.set_variable("note_velocity", self.selected_note_velocity, scene_name="note")
         print(f"Velocity changed to: {self.tracks[self.current_track].velocity}")
 
     def on_volume_rotate(self, position):
         """Callback pour rotation du volume"""
         self.volume = max(0, min(100, position))
-        if self.screen_manager:
-            self.screen_manager.set_variable("volume", self.volume)
         print(f"Volume changed to: {self.volume}")
     
     def on_division_click(self, position):
