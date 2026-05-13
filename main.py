@@ -45,7 +45,7 @@ if __name__ == "__main__":
         mode = seq.mode
         
         def get_note_editing_range():
-            pos = seq.selected_note_value if seq.selected_note_value is not None else 0
+            pos = seq.tracks[seq.current_track].pattern[seq.selected_note] if seq.selected_note is not None and seq.tracks[seq.current_track].pattern else 0
             encoder.set_range(
                 0, 
                 127, 
@@ -65,7 +65,7 @@ if __name__ == "__main__":
                 0, 
                 100, 
                 rotaryEncoder.enum.BLOCK, 
-                sync_position=seq.selected_note_velocity
+                sync_position=seq.tracks[seq.current_track].velocity
             )
         
         def get_instrument_editing_range():
@@ -216,7 +216,7 @@ if __name__ == "__main__":
 
     def prev_button_clicked():
         def inst_clk_callback(position):
-            seq.instrument.cycle_parameter(-1)
+            seq.instrument.cycle_component(-1)
             instrument_ctrl.set_group(seq.instrument.params.selected_component)
             instrument_ctrl.refresh()
 

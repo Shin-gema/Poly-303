@@ -109,7 +109,7 @@ class SequencerController(SceneController):
     def _draw_edit(self, sm):
         t      = self.seq.tracks[self.seq.current_track]
         idx    = self.seq.selected_note or 0
-        midi   = self.seq.selected_note_value or 0
+        midi   = self.seq.tracks[self.seq.current_track].pattern[idx] if idx < len(self.seq.tracks[self.seq.current_track].pattern) else 0
         note   = self.seq.midi_note_to_name(midi)
         vel    = t.velocity
         octave = (midi // 12) - 1

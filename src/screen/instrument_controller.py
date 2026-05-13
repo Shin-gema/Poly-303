@@ -1,3 +1,5 @@
+import math
+
 from src.screen.screen_controller import SceneController
 
 class InstrumentController(SceneController):
@@ -8,16 +10,19 @@ class InstrumentController(SceneController):
         super().__init__(sm)
 
     def _register_scenes(self):
-        self.sm.register_scene("inst_params",   self._draw_params)
         self.sm.register_scene("inst_envelope", self._draw_envelope)
-
-    # ── Navigation ────────────────────────────────────────────────────────────
+        self.sm.register_scene("inst_filter",   self._draw_filter)
+        self.sm.register_scene("inst_osc",      self._draw_osc)
+        self.sm.register_scene("inst_params",   self._draw_params)
 
     def set_group(self, group_name):
-        """Change de groupe, remet la sélection à zéro."""
         self.current_group  = group_name
         self.selected_param = 0
-        scene = "inst_envelope" if group_name == "envelope" else "inst_params"
+        scene = {
+            "envelope":   "inst_envelope",
+            "filter":     "inst_filter",
+            "oscillator": "inst_osc",
+        }.get(group_name, "inst_params")
         self.set_scene(scene)
         self.refresh()
 
@@ -171,3 +176,141 @@ class InstrumentController(SceneController):
 
             sm.text(x,     53, key[0].upper(), fill=fg)
             sm.text(x + 7, 53, formatted,      fill=fg)
+
+    def _draw_filter(self, sm):
+        p      = self.instrument.params
+        params = self._get_current_params()  # [cutoff, resonance, env_mod]
+        sel    = self.selected_param
+
+        sm.text(0, 1, "FILTER")
+        sm.line(0, 10, 127, 10)
+
+        # ── Courbe de réponse ─────────────────────────────────────────────────
+        x0, y0, w, h = 2, 12, 124, 36
+        min_log = math.log(20)
+        max_log = math.log(8000)
+
+        def freq_to_x(freq):
+            return x0 + int((math.log(max(freq, 20)) - min_log) / (max_log - min_log) * w)
+
+        cutoff_x = freq_to_x(p.cutoff)
+
+        # Courbe low-pass pixel par pixel
+        prev = None
+        for i in range(w):
+            freq  = math.exp(min_log + (i / w) * (max_log - min_log))
+            ratio = freq / max(p.cutoff, 20)
+            mag   = 1.0 / math.sqrt(1 + ratio ** 4)
+            # pic de résonance
+            if 0.5 < ratio < 1.5:
+                mag += p.resonance * 0.6 * math.exp(-((ratio - 1) * 4) ** 2)
+            mag = min(mag, 1.2)
+            px  = x0 + i
+            py  = y0 + h - int(mag * h * 0.85)
+            if prev:
+                sm.line(prev[0], prev[1], px, py)
+            prev = (px, py)
+
+        # Ligne de base
+        sm.line(x0, y0 + h, x0 + w, y0 + h)
+
+        # Ligne cutoff verticale (pleine si sélectionné, tirets sinon)
+        if sel == 0:
+            sm.line(cutoff_x, y0, cutoff_x, y0 + h)
+        else:
+            for y in range(y0, y0 + h, 3):
+                sm.draw.point((cutoff_x, y), fill=1)
+
+        # Ligne env_mod (cutoff modulé) en tirets
+        mod_cutoff = min(p.cutoff * (1 + p.env_mod * 2), 8000)
+        mod_x      = freq_to_x(mod_cutoff)
+        mod_fill   = 1 if sel == 2 else 0
+        if mod_x != cutoff_x:
+            for y in range(y0, y0 + h, 3):
+                sm.draw.point((mod_x, y), fill=1)
+
+        # ── Valeurs en bas ────────────────────────────────────────────────────
+        sm.line(0, 51, 127, 51)
+
+        labels = ["CO",  "RES", "ENV"]
+        vals   = [
+            f"{p.cutoff:.0f}Hz",
+            f"{p.resonance * 100:.0f}%",
+            f"{p.env_mod   * 100:.0f}%",
+        ]
+        col_w = 43
+
+        for i, (lbl, val) in enumerate(zip(labels, vals)):
+            x      = 1 + i * col_w
+            is_sel = i == sel
+            if is_sel:
+                sm.draw.rectangle((x, 52, x + col_w - 2, 63), fill=1)
+                fg = 0
+            else:
+                fg = 1
+            sm.text(x + 1, 53, lbl, fill=fg)
+            sm.text(x + 1, 59, val, fill=fg)
+
+    def _draw_osc(self, sm):
+        p      = self.instrument.params
+        params = self._get_current_params()  # [waveform, pulse_width]
+        sel    = self.selected_param
+
+        sm.text(0, 1, "OSCILLATOR")
+        sm.line(0, 10, 127, 10)
+
+        # ── Forme d'onde (moitié gauche) ──────────────────────────────────────
+        x0, y0, w, h = 2, 13, 74, 34
+        cycles  = 2
+        cycle_w = w // cycles
+
+        sm.line(x0, y0 + h, x0 + w, y0 + h)  # ligne de base
+
+        for c in range(cycles):
+            cx = x0 + c * cycle_w
+
+            if p.waveform == "SAW":
+                sm.line(cx, y0 + h, cx + cycle_w - 1, y0)
+                # trait de retour en tirets
+                for y in range(y0, y0 + h, 3):
+                    sm.draw.point((cx + cycle_w - 1, y), fill=1)
+
+            elif p.waveform == "PULSE":
+                pw = int(p.pulse_width * cycle_w)
+                pw = max(2, min(pw, cycle_w - 2))
+                # flanc montant
+                sm.line(cx,        y0 + h, cx,        y0 + 4)
+                # plateau haut
+                sm.line(cx,        y0 + 4, cx + pw,   y0 + 4)
+                # flanc descendant
+                sm.line(cx + pw,   y0 + 4, cx + pw,   y0 + h)
+                # plateau bas
+                sm.line(cx + pw,   y0 + h, cx + cycle_w, y0 + h)
+
+                # indicateur pulse_width si param sélectionné
+                if sel == 1:
+                    for y in range(y0 + 4, y0 + h, 2):
+                        sm.draw.point((cx + pw, y), fill=1)
+
+        # ── Paramètres (moitié droite) ────────────────────────────────────────
+        sm.line(79, 11, 79, 50)
+
+        pw_label = f"{p.pulse_width * 100:.0f}%" if p.waveform == "PULSE" else "N/A"
+        rows = [
+            ("WAVE", str(p.waveform)),
+            ("PW",   pw_label),
+        ]
+
+        for i, (lbl, val) in enumerate(rows):
+            y      = 14 + i * 14
+            is_sel = i == sel
+            if is_sel:
+                sm.draw.rectangle((81, y - 1, 126, y + 11), fill=1)
+                fg = 0
+            else:
+                fg = 1
+            sm.text(83, y,     lbl, fill=fg)
+            sm.text(97, y,     val, fill=fg)
+
+        sm.line(0, 53, 127, 53)
+        sm.text(2, 56, f"waveform: {p.waveform}", fill=1)
