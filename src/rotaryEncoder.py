@@ -12,6 +12,7 @@ class Encoder:
         self.encoder = RotaryEncoder(a=clk_pin, b=dt_pin, wrap=False, max_steps=1000)
         self.button = Button(sw_pin, pull_up=True, bounce_time=0.05)
         self.position = 0
+        self.last_encoder_steps = 0
 
         self.encoder.when_rotated = self.rotate
         self.button.when_pressed = self.clic
@@ -23,10 +24,12 @@ class Encoder:
         self.min_position = min_position
         self.max_position = max_position
         self.mode = enum.BLOCK
+        self.step = 1
 
-    def set_range(self, min_position: int, max_position: int, mode: enum = None, sync_position: int | None = None):
+    def set_range(self, min_position: int, max_position: int, mode: enum = None, sync_position: int | None = None, step: int = 1):
         self.min_position = int(min_position)
         self.max_position = int(max_position)
+        self.step = step
 
         if mode is not None:
             self.mode = mode
@@ -46,9 +49,10 @@ class Encoder:
             else:
                 target = self.max_position
         self.position = target
+        self.last_encoder_steps = 0  # Réinitialiser le tracking
 
         try:
-            self.encoder.steps = target
+            self.steps = target
         except Exception:
             pass
 
@@ -66,29 +70,36 @@ class Encoder:
             else:
                 pos = self.max_position
         self.position = pos
+        self.last_encoder_steps = 0  # Réinitialiser le tracking
         try:
-            self.encoder.steps = pos
+            self.steps = pos
         except Exception:
             pass
 
     def rotate(self):
-        self.position = self.encoder.steps
+        # Calculer le delta des steps de l'encodeur depuis la dernière rotation
+        encoder_delta = self.encoder.steps - self.last_encoder_steps
+        self.last_encoder_steps = self.encoder.steps
+        
+        # Incrémenter la position par (delta * step)
+        self.position += encoder_delta * round(self.step, 2)
+        self.position = round(self.position, 2)
+        
+        # Appliquer les limites
         if self.position < self.min_position:
             if self.mode == enum.CONTINUOUS:
                 self.position = self.max_position
-                self.encoder.steps = self.max_position
             else:
                 self.position = self.min_position
-                self.encoder.steps = self.min_position
         elif self.position > self.max_position:
             if self.mode == enum.CONTINUOUS:
                 self.position = self.min_position
-                self.encoder.steps = self.min_position
             else:
                 self.position = self.max_position
-                self.encoder.steps = self.max_position
+        
         if self._rotate_callback:
             self._rotate_callback(self.position)
+        print(f"Encoder rotated: position={self.position}, encoder_steps={self.encoder.steps}, encoder_delta={encoder_delta}, step={self.step}")
 
     def clic(self):
         if self._click_callback:
