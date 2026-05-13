@@ -40,76 +40,134 @@ if __name__ == "__main__":
     seq_ctrl  = SequencerController(screen, seq)
     instrument_ctrl = InstrumentController(screen, seq.instrument)
     seq_ctrl.show_play()
-    
-    def encoder_rotate_callback(position):
-        if seq.mode == sequencer.mode.NOTE_SELECTION:
-            seq.on_selection_rotate(position)
 
-        elif seq.mode == sequencer.mode.NOTE_EDITING:
-            seq.on_edit_rotate(position)
-        elif seq.mode == sequencer.mode.INSTRUMENT_EDITING:
-            seq.instrument.set_parameter_value(position)
-            instrument_ctrl.refresh()
-        else:
-            seq.on_division_rotate(position)
-
-    def sync_frequency_encoder_range():
-        if seq.mode == sequencer.mode.SEQUENCE:
+    def sync_encoder():
+        mode = seq.mode
+        
+        def get_note_editing_range():
+            pos = seq.selected_note_value if seq.selected_note_value is not None else 0
+            encoder.set_range(
+                0, 
+                127, 
+                rotaryEncoder.enum.CONTINUOUS, 
+                sync_position=pos
+            )
+        
+        def get_note_selection_range():
+            max_pos = (seq.tracks[seq.current_track].division - 1) if seq.tracks[seq.current_track].division > 0 else 15
+            encoder.set_range(
+                0, 
+                max_pos, 
+                rotaryEncoder.enum.CONTINUOUS, 
+                sync_position=(seq.selected_note or 0)
+            )
+            freqEncoder.set_range(
+                0, 
+                100, 
+                rotaryEncoder.enum.BLOCK, 
+                sync_position=seq.selected_note_velocity
+            )
+        
+        def get_instrument_editing_range():
+            info = seq.instrument.get_parameter_info(
+                seq.instrument.params.selected_component, 
+                seq.instrument.params.selected_parameter
+            )
+            encoder.set_range(
+                int(info["min"]), int(info["max"]), 
+                rotaryEncoder.enum.BLOCK, 
+                sync_position=int(seq.instrument.get_parameter_position()), 
+                step=info["step"]
+            )
+        
+        def get_sequence_range():
+            encoder.set_range(
+                0,
+                16,
+                rotaryEncoder.enum.BLOCK, 
+                sync_position=seq.tracks[seq.current_track].division
+            )
             if seq.frequency_target == "volume":
-                freqEncoder.set_range(0, 100, rotaryEncoder.enum.BLOCK, sync_position=seq.volume)
+                freqEncoder.set_range(
+                    0, 
+                    100, 
+                    rotaryEncoder.enum.BLOCK, 
+                    sync_position=seq.volume
+                )
             else:
                 bpm_position = max(0, min(240, (seq.bpm - 30) // 2))
-                freqEncoder.set_range(0, 240, rotaryEncoder.enum.BLOCK, sync_position=bpm_position)
-        elif seq.mode == sequencer.mode.NOTE_EDITING:
-            freqEncoder.set_range(0, 100, rotaryEncoder.enum.BLOCK, sync_position=seq.selected_note_velocity)
-        else:
-            freqEncoder.set_range(0, 240, rotaryEncoder.enum.BLOCK, sync_position=max(0, min(240, (seq.bpm - 30) // 2)))
-
-    encoder.on_rotate(encoder_rotate_callback)
-    
+                freqEncoder.set_range(
+                    0, 
+                    240, 
+                    rotaryEncoder.enum.BLOCK, 
+                    sync_position=bpm_position
+                )
+        
+        switch = {
+            sequencer.mode.NOTE_EDITING: get_note_editing_range,
+            sequencer.mode.NOTE_SELECTION: get_note_selection_range,
+            sequencer.mode.INSTRUMENT_EDITING: get_instrument_editing_range,
+            sequencer.mode.SEQUENCE: get_sequence_range,
+        }
+        
+        action = switch.get(mode)
+        if action:
+            action()
+        
+    def encoder_rotate_callback(position):
+        switch = {
+            sequencer.mode.SEQUENCE: lambda: seq.on_division_rotate(position),
+            sequencer.mode.NOTE_SELECTION: lambda: seq.on_selection_rotate(position),
+            sequencer.mode.NOTE_EDITING: lambda: seq.on_edit_rotate(position),
+            sequencer.mode.INSTRUMENT_EDITING: lambda: seq.instrument.set_parameter_value(position),
+        }
+        action = switch.get(seq.mode)
+        if action:
+            action()
 
     def on_division_click(position):
         seq.on_division_click(position)
-        if seq.mode == sequencer.mode.NOTE_EDITING:
-            # Passage en édition de note : plage MIDI 0..127 (continuous)
-            encoder.set_range(0, 127, rotaryEncoder.enum.CONTINUOUS, sync_position=(seq.selected_note_value if seq.selected_note_value is not None else 0))
-            seq_ctrl.show_edit()
-        elif seq.mode == sequencer.mode.NOTE_SELECTION:
-            # Sélection de note : plage continue selon la division
-            max_pos = (seq.tracks[seq.current_track].division - 1) if seq.tracks[seq.current_track].division > 0 else 15
-            encoder.set_range(0, max_pos, rotaryEncoder.enum.CONTINUOUS, sync_position=(seq.selected_note if seq.selected_note is not None else 0))
-            seq_ctrl.show_note()
-        elif seq.mode == sequencer.mode.INSTRUMENT_EDITING:
-            # Mode édition instrument : cycler vers le paramètre suivant
+
+        def inst_clk_callback(position):
             seq.instrument.cycle_parameter(1)
-            info = seq.instrument.get_parameter_info(seq.instrument.params.selected_component, seq.instrument.params.selected_parameter)
-            encoder.set_range(int(info["min"]), int(info["max"]), rotaryEncoder.enum.BLOCK, sync_position=int(seq.instrument.get_parameter_position()), step =info["step"])
             instrument_ctrl.on_param_select(+1)
             instrument_ctrl.refresh()
-        else:
-            # Mode normal (sequence) : encoder bloqué 0..16
-            encoder.set_range(0, 16, rotaryEncoder.enum.BLOCK, sync_position=seq.tracks[seq.current_track].division)
-            seq_ctrl.show_play()
+        
+        switch = {
+            sequencer.mode.SEQUENCE: lambda: seq_ctrl.show_play(),
+            sequencer.mode.NOTE_SELECTION: lambda: seq_ctrl.show_note(),
+            sequencer.mode.NOTE_EDITING: lambda: seq_ctrl.show_edit(),
+            sequencer.mode.INSTRUMENT_EDITING: lambda: inst_clk_callback(position),
+        }       
+        action = switch.get(seq.mode)
+        if action:            
+            action()
+        sync_encoder()
+
+    encoder.on_rotate(encoder_rotate_callback)
     encoder.on_click(on_division_click)
 
+
     def on_frequency_rotate(position):
-        if seq.mode == sequencer.mode.SEQUENCE:
-            seq.on_frequency_rotate(position)
-            sync_frequency_encoder_range()
-        elif seq.mode == sequencer.mode.NOTE_EDITING:
-            seq.on_velocity_rotate(position)
-            sync_frequency_encoder_range()
+        switch = {
+            sequencer.mode.SEQUENCE: lambda: seq.on_frequency_rotate(position),
+            sequencer.mode.NOTE_EDITING: lambda: seq.on_velocity_rotate(position),
+        }
+        action = switch.get(seq.mode)
+        if action:            
+            action()
+        
+    def on_frequency_click(position):
+        switch = {
+            sequencer.mode.SEQUENCE: lambda: seq.on_frequency_click(position),
+        }        
+        action = switch.get(seq.mode)
+        if action:
+            action()
 
     freqEncoder.on_rotate(on_frequency_rotate)
-
-    def on_frequency_click(position):
-        seq.on_frequency_click(position)
-        if seq.mode == sequencer.mode.SEQUENCE:
-            seq.toggle_frequency_target()
-            sync_frequency_encoder_range()
-
-
     freqEncoder.on_click(on_frequency_click)
+
 
     def play_button_clicked():
         if seq.is_playing:
@@ -117,56 +175,59 @@ if __name__ == "__main__":
         else:
             seq.play()
 
+    play_button.on_click(play_button_clicked)
+
 
     def shift_button_clicked():
         seq.mode = sequencer.mode((seq.mode.value + 1) % len(sequencer.mode))
         if seq.mode == sequencer.mode.NOTE_EDITING:
             seq.mode = sequencer.mode((seq.mode.value + 1) % len(sequencer.mode))
 
-        if seq.mode == sequencer.mode.NOTE_SELECTION:
-            max_pos = (seq.tracks[seq.current_track].division - 1) if seq.tracks[seq.current_track].division > 0 else 15
-            encoder.set_range(0, max_pos, rotaryEncoder.enum.CONTINUOUS, sync_position=(seq.selected_note if seq.selected_note is not None else 0))
-            seq_ctrl.show_note()
-            return
-        if seq.mode == sequencer.mode.INSTRUMENT_EDITING:
-            info = seq.instrument.get_parameter_info(seq.instrument.params.selected_component, seq.instrument.params.selected_parameter)
-            encoder.set_range(int(info["min"]), int(info["max"]), rotaryEncoder.enum.BLOCK, sync_position=int(seq.instrument.get_parameter_position()), step =info["step"])
-            instrument_ctrl.set_group(seq.instrument.params.selected_component)
-            print("Shift button clicked - Mode:", seq.mode)
-            return
-        encoder.set_range(0, 16, rotaryEncoder.enum.BLOCK, sync_position=seq.tracks[seq.current_track].division)
-        seq_ctrl.show_play()
+        switch = {
+            sequencer.mode.SEQUENCE: lambda: seq_ctrl.show_play(),
+            sequencer.mode.NOTE_SELECTION: lambda: seq_ctrl.show_note(),
+            sequencer.mode.INSTRUMENT_EDITING: lambda: instrument_ctrl.set_group(seq.instrument.params.selected_component),
+        }
+        action = switch.get(seq.mode)
+        if action:
+            action()
+        
+        sync_encoder()
 
-        sync_frequency_encoder_range()
+    shift_button.on_click(shift_button_clicked)
 
 
     def next_button_clicked():
-        print("Next button clicked")
-        if seq.mode == sequencer.mode.SEQUENCE:
-            seq.current_track = (seq.current_track + 1) % len(seq.tracks)
-            print(f"Current track: {seq.current_track}")
-        if seq.mode == sequencer.mode.INSTRUMENT_EDITING:
+        def inst_clk_callback(position):
             seq.instrument.cycle_component(1)
-            info = seq.instrument.get_parameter_info(seq.instrument.params.selected_component, seq.instrument.params.selected_parameter)
-            encoder.set_range(int(info["min"]), int(info["max"]), rotaryEncoder.enum.BLOCK, sync_position=int(seq.instrument.get_parameter_position()), step =info["step"])
             instrument_ctrl.set_group(seq.instrument.params.selected_component)
-            print("Next button clicked - Mode:", seq.mode)
+            instrument_ctrl.refresh()
+
+        switch = {
+            sequencer.mode.SEQUENCE: lambda: setattr(seq, 'current_track', (seq.current_track + 1) % len(seq.tracks)),
+            sequencer.mode.INSTRUMENT_EDITING: lambda: inst_clk_callback(None),
+        }
+        action = switch.get(seq.mode)
+        if action:
+            action()
+    
+    next_button.on_click(next_button_clicked)
+
 
     def prev_button_clicked():
-        print("Previous button clicked")
-        if seq.mode == sequencer.mode.SEQUENCE:
-            seq.current_track = (seq.current_track - 1) % len(seq.tracks)
-            print(f"Current track: {seq.current_track}")
-        if seq.mode == sequencer.mode.INSTRUMENT_EDITING:
-            seq.instrument.cycle_component(-1)
-            info = seq.instrument.get_parameter_info(seq.instrument.params.selected_component, seq.instrument.params.selected_parameter)
-            encoder.set_range(int(info["min"]), int(info["max"]), rotaryEncoder.enum.BLOCK, sync_position=int(seq.instrument.get_parameter_position()), step =info["step"])
+        def inst_clk_callback(position):
+            seq.instrument.cycle_parameter(-1)
             instrument_ctrl.set_group(seq.instrument.params.selected_component)
-            print("Previous button clicked - Mode:", seq.mode)
+            instrument_ctrl.refresh()
 
-    play_button.on_click(play_button_clicked)
-    shift_button.on_click(shift_button_clicked)
-    next_button.on_click(next_button_clicked)
+        switch = {
+            sequencer.mode.SEQUENCE: lambda: setattr(seq, 'current_track', (seq.current_track - 1) % len(seq.tracks)),
+            sequencer.mode.INSTRUMENT_EDITING: lambda: inst_clk_callback(None),
+        }
+        action = switch.get(seq.mode)
+        if action:            
+            action()
+
     prev_button.on_click(prev_button_clicked)
 
     try:
